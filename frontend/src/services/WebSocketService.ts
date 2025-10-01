@@ -181,7 +181,9 @@ export class WebSocketService {
         const updatedTask: TTSTask = {
           ...this.currentTask,
           progress: message.progress,
-          message: message.message || '生成中...'
+          message: message.message || '生成中...',
+          startTime: this.currentTask?.startTime || Date.now(),
+          createdAt: this.currentTask?.createdAt || Date.now()
         };
 
         console.log('✅ 更新任务进度:', updatedTask.progress, updatedTask.message);
@@ -221,7 +223,9 @@ export class WebSocketService {
           progress: 100,
           result: message.result,
           audioUrl: message.result.startsWith('/') ? `http://127.0.0.1:8000${message.result}` : message.result,
-          message: '生成完成'
+          message: '生成完成',
+          startTime: this.currentTask?.startTime || Date.now(),
+          createdAt: this.currentTask?.createdAt || Date.now()
         };
 
         // 更新内部状态
@@ -266,7 +270,9 @@ export class WebSocketService {
           ...this.currentTask,
           status: 'error',
           error: message.error || '生成失败',
-          message: '生成失败'
+          message: '生成失败',
+          startTime: this.currentTask?.startTime || Date.now(),
+          createdAt: this.currentTask?.createdAt || Date.now()
         };
 
         this.currentTask = errorTask;

@@ -67,6 +67,7 @@ interface TTSState {
   setShowAdvanced: (show: boolean) => void;
   setSelectedExample: (example: ExampleCase | null) => void;
   setTextSegments: (segments: Array<{ index: number; content: string; tokens: number }>) => void;
+  clearCurrentTask: () => void;
   reset: () => void;
 }
 
@@ -164,8 +165,19 @@ export const useTTSStore = create<TTSState>()(
               message: '生成完成'
             };
 
+            // 延迟清理任务，给用户足够时间查看结果
+            setTimeout(() => {
+              set((currentState) => {
+                if (currentState.currentTask?.id === taskId) {
+                  console.log('自动清理已完成的任务:', taskId);
+                  return { currentTask: null };
+                }
+                return currentState;
+              });
+            }, 30000); // 30秒后自动清理
+
             return {
-              currentTask: completedTask, // 保持当前任务显示，不设为null
+              currentTask: completedTask, // 保持当前任务显示，显示完成状态
               taskHistory: [completedTask, ...state.taskHistory.slice(0, 9)], // 保留最近10个任务
               isGenerating: false
             };
@@ -182,8 +194,19 @@ export const useTTSStore = create<TTSState>()(
               message: error
             };
 
+            // 错误任务也延迟清理，让用户有时间查看错误信息
+            setTimeout(() => {
+              set((currentState) => {
+                if (currentState.currentTask?.id === taskId) {
+                  console.log('自动清理失败的任务:', taskId);
+                  return { currentTask: null };
+                }
+                return currentState;
+              });
+            }, 10000); // 10秒后自动清理错误任务
+
             return {
-              currentTask: null,
+              currentTask: failedTask, // 保留失败任务显示一段时间
               taskHistory: [failedTask, ...state.taskHistory.slice(0, 9)],
               isGenerating: false
             };
@@ -228,6 +251,8 @@ export const useTTSStore = create<TTSState>()(
       
       setTextSegments: (segments) => set({ textSegments: segments }),
       
+      clearCurrentTask: () => set({ currentTask: null, isGenerating: false }),
+
       reset: () => set({
         ttsParams: { ...defaultTTSParams },
         promptAudio: null,

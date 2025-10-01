@@ -157,15 +157,25 @@ function App() {
             {/* 当前任务进度 */}
             {currentTask && (
               <div className="card">
-                <h3 className="text-lg font-semibold text-secondary-900 mb-4">
-                  当前任务
-                </h3>
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-lg font-semibold text-secondary-900">
+                    当前任务
+                  </h3>
+                  {(currentTask.status === 'completed' || currentTask.status === 'error') && (
+                    <button
+                      onClick={() => clearCurrentTask()}
+                      className="text-sm px-3 py-1 bg-secondary-100 hover:bg-secondary-200 text-secondary-600 rounded transition-colors"
+                    >
+                      清除
+                    </button>
+                  )}
+                </div>
                 <ProgressBar
                   progress={currentTask.progress || 0}
                   status={currentTask.status}
-                  message={currentTask.error || '正在处理...'}
+                  message={currentTask.error || currentTask.message || '正在处理...'}
                 />
-                
+
                 {/* 显示生成的音频 */}
                 {currentTask.status === 'completed' && currentTask.audioUrl && (
                   <div className="mt-4">
@@ -176,6 +186,18 @@ function App() {
                       audioUrl={currentTask.audioUrl}
                       title={`任务 ${currentTask.id.slice(0, 8)}`}
                     />
+                  </div>
+                )}
+
+                {/* 任务状态提示 */}
+                {currentTask.status === 'completed' && (
+                  <div className="mt-4 text-sm text-green-600 text-center">
+                    ✅ 任务已完成，将在30秒后自动清除
+                  </div>
+                )}
+                {currentTask.status === 'error' && (
+                  <div className="mt-4 text-sm text-red-600 text-center">
+                    ❌ 任务失败，将在10秒后自动清除
                   </div>
                 )}
               </div>
