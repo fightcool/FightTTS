@@ -1,3 +1,5 @@
+import { connectionMonitor } from './connectionMonitor';
+
 export interface WebSocketMessage {
   type: 'start' | 'progress' | 'complete' | 'error' | 'ping' | 'pong' | 'heartbeat' | 'heartbeat_response' | 'heartbeat_check';
   task_id?: string;
@@ -15,6 +17,8 @@ export interface WebSocketConfig {
   maxReconnectAttempts?: number;
   heartbeatInterval?: number;
   connectionTimeout?: number;
+  idleTimeout?: number;  // 空闲超时时间
+  smartMode?: boolean;   // 智能模式：根据活动自动管理连接
 }
 
 export class WebSocketClient {
@@ -30,6 +34,12 @@ export class WebSocketClient {
   private connectionStartTime = 0;
   private lastConnectionAttempt = 0; // 添加最后连接尝试时间
   private readonly MIN_CONNECTION_INTERVAL = 2000; // 最小连接间隔2秒
+
+  // 智能连接管理
+  private lastActivityTime = 0;
+  private idleTimer: number | null = null;
+  private isActive = false;
+  private hasActiveTask = false;
   
   private listeners: {
     [K in WebSocketMessage['type']]?: ((message: WebSocketMessage) => void)[]
@@ -47,10 +57,12 @@ export class WebSocketClient {
 
   constructor(config: WebSocketConfig) {
     this.config = {
-      reconnectInterval: 3000,   // 重连间隔3秒，避免过于频繁
-      maxReconnectAttempts: 3,   // 减少重连次数，避免过度重连
-      heartbeatInterval: 30000,  // 心跳间隔30秒，匹配后端45秒超时
-      connectionTimeout: 15000,  // 连接超时15秒
+      reconnectInterval: 5000,   // 重连间隔5秒
+      maxReconnectAttempts: 0,   // 禁用自动重连，改为按需连接
+      heartbeatInterval: 30000,  // 心跳间隔30秒
+      connectionTimeout: 10000,  // 连接超时10秒
+      idleTimeout: 300000,       // 空闲超时5分钟
+      smartMode: false,          // 禁用智能模式，简化逻辑
       ...config
     };
   }
@@ -62,6 +74,13 @@ export class WebSocketClient {
 
     if (this.ws?.readyState === WebSocket.OPEN) {
       console.log('WebSocket已经连接，跳过');
+      return Promise.resolve();
+    }
+
+    // 智能连接检查
+    if (!this._shouldConnect()) {
+      connectionMonitor.onSmartModeSkip();
+      console.log('🔌 智能模式：跳过连接');
       return Promise.resolve();
     }
 
@@ -139,8 +158,10 @@ export class WebSocketClient {
           // 只在首次连接时显示详细信息
           if (this.reconnectAttempts === 0) {
             console.log(`✅ WebSocket连接成功 (${connectionTime}ms)`);
+            connectionMonitor.onConnect();
           } else {
             console.log(`✅ WebSocket重连成功 (${connectionTime}ms)`);
+            connectionMonitor.onReconnect();
           }
 
           this.isConnecting = false;
@@ -178,11 +199,14 @@ export class WebSocketClient {
           console.log(`断开原因: ${event.reason}`);
           console.log(`连接持续时间: ${connectionTime}ms`);
           console.log(`是否正常关闭: ${event.wasClean}`);
-          
+
           this.isConnecting = false;
           this.stopHeartbeat();
           this.stopConnectionMonitor();
           this.connectionListeners.close.forEach(listener => listener());
+
+          // 记录断开连接
+          connectionMonitor.onDisconnect();
           
           if (!this.isDestroyed && this.reconnectAttempts < this.config.maxReconnectAttempts) {
             console.log(`准备重连，当前重连次数: ${this.reconnectAttempts}`);
@@ -218,10 +242,85 @@ export class WebSocketClient {
   }
 
   private handleMessage(message: WebSocketMessage) {
+    // 更新活动时间
+    this.updateActivity();
+
     const listeners = this.listeners[message.type];
     if (listeners) {
       listeners.forEach(listener => listener(message));
     }
+  }
+
+  // 更新活动状态
+  private updateActivity() {
+    this.lastActivityTime = Date.now();
+    this.isActive = true;
+
+    // 记录活动
+    connectionMonitor.onActivity();
+
+    // 如果在智能模式下，重新启动空闲计时器
+    if (this.config.smartMode && this.idleTimer) {
+      this.resetIdleTimer();
+    }
+  }
+
+  // 重置空闲计时器
+  private resetIdleTimer() {
+    if (this.idleTimer) {
+      clearTimeout(this.idleTimer);
+    }
+
+    if (this.config.smartMode && !this.hasActiveTask) {
+      this.idleTimer = setTimeout(() => {
+        console.log('🔌 连接空闲超时，断开连接以节省资源');
+        connectionMonitor.onIdleTimeout();
+        this.disconnect();
+      }, this.config.idleTimeout);
+    }
+  }
+
+  // 设置任务状态
+  public setActiveTask(active: boolean) {
+    this.hasActiveTask = active;
+    if (active) {
+      console.log('📋 检测到活跃任务，保持连接');
+      this.updateActivity();
+      // 如果有活跃任务，停止空闲计时器
+      if (this.idleTimer) {
+        clearTimeout(this.idleTimer);
+        this.idleTimer = null;
+      }
+    } else {
+      console.log('✅ 任务完成，启动空闲计时器');
+      this.resetIdleTimer();
+    }
+  }
+
+  // 检查是否应该连接
+  private _shouldConnect(): boolean {
+    if (!this.config.smartMode) {
+      return true; // 非智能模式始终连接
+    }
+
+    // 如果有活跃任务，应该连接
+    if (this.hasActiveTask) {
+      return true;
+    }
+
+    // 如果是初始连接（没有活动记录），应该连接
+    if (this.lastActivityTime === 0) {
+      return true;
+    }
+
+    // 如果最近有活动，应该连接
+    const timeSinceLastActivity = Date.now() - this.lastActivityTime;
+    if (timeSinceLastActivity < 300000) { // 5分钟内有活动
+      return true;
+    }
+
+    console.log('💤 智能模式：无活跃任务且超时，跳过连接');
+    return false;
   }
 
   private startHeartbeat() {
@@ -306,6 +405,11 @@ export class WebSocketClient {
   }
 
   send(message: WebSocketMessage) {
+    // 发送消息时更新活动状态
+    if (message.type !== 'ping') {
+      this.updateActivity();
+    }
+
     if (this.ws?.readyState === WebSocket.OPEN) {
       const messageStr = JSON.stringify(message);
       // 只对非心跳消息输出日志
@@ -315,6 +419,14 @@ export class WebSocketClient {
       this.ws.send(messageStr);
     } else {
       console.warn(`📤 WebSocket发送失败 (${message.type}): 状态 ${this.ws?.readyState}`);
+
+      // 如果是重要消息且连接断开，尝试重新连接
+      if (message.type !== 'ping' && this._shouldConnect()) {
+        console.log(`🔄 尝试重新连接以发送消息: ${message.type}`);
+        this.connect().catch(error => {
+          console.error('重连失败:', error);
+        });
+      }
     }
   }
 
@@ -380,14 +492,24 @@ export class WebSocketClient {
   }
 
   disconnect() {
-    this.isDestroyed = true;
+    this.isDestroyed = false; // 重置标志，允许重新连接
     this.stopHeartbeat();
-    
+
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
-    
+
+    if (this.connectionCheckTimer) {
+      clearInterval(this.connectionCheckTimer);
+      this.connectionCheckTimer = null;
+    }
+
+    if (this.idleTimer) {
+      clearTimeout(this.idleTimer);
+      this.idleTimer = null;
+    }
+
     if (this.ws) {
       this.ws.close();
       this.ws = null;
@@ -400,5 +522,10 @@ export class WebSocketClient {
 
   get readyState(): number {
     return this.ws?.readyState ?? WebSocket.CLOSED;
+  }
+
+  // 暴露智能连接检查方法
+  public shouldConnect(): boolean {
+    return this._shouldConnect();
   }
 }

@@ -37,8 +37,8 @@ export class WebSocketService {
   private connectionStatus: ConnectionStatus = 'disconnected';
   private currentTask: TTSTask | null = null;
   private config: WebSocketServiceConfig;
-  private heartbeatTimer: number | null = null;
-  private heartbeatInterval = 30000; // 30秒
+  private autoDisconnectTimer: number | null = null;
+  private autoDisconnectDelay = 5000; // 任务完成5秒后自动断开
 
   constructor(config: WebSocketServiceConfig) {
     this.config = config;

@@ -5,14 +5,14 @@ import { useWebSocketService } from '../hooks/useWebSocketService';
 
 export const ConnectionStatus: React.FC = () => {
   const { clientId } = useTTSStore();
-  const { connectionStatus, isConnected, connect } = useWebSocketService();
+  const { connectionStatus, connect } = useWebSocketService();
 
   const getStatusConfig = () => {
     switch (connectionStatus) {
       case 'connected':
         return {
           icon: <CheckCircle className="w-4 h-4" />,
-          text: '已连接',
+          text: '服务已连接',
           color: 'text-green-600 bg-green-50 border-green-200',
           iconColor: 'text-green-500'
         };

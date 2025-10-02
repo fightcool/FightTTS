@@ -21,6 +21,24 @@ export default defineConfig({
         ws: true,
         changeOrigin: true,
         secure: false,
+      },
+      // 音频样本文件代理
+      '/audio-samples': {
+        target: 'http://127.0.0.1:8000',
+        changeOrigin: true,
+        secure: false,
+      },
+      // 输出文件代理
+      '/outputs': {
+        target: 'http://127.0.0.1:8000',
+        changeOrigin: true,
+        secure: false,
+      },
+      // 上传文件代理
+      '/uploads': {
+        target: 'http://127.0.0.1:8000',
+        changeOrigin: true,
+        secure: false,
       }
     }
   }

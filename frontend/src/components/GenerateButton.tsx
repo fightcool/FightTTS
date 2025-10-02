@@ -11,6 +11,8 @@ export const GenerateButton: React.FC = () => {
     ttsParams,
     promptAudio,
     emoAudio,
+    selectedVoiceSample,
+    selectedEmotionSample,
     currentTask,
     clientId,
     setCurrentTask,
@@ -18,13 +20,13 @@ export const GenerateButton: React.FC = () => {
     setIsLoading
   } = useTTSStore();
 
-  const { connectionStatus, isConnected } = useWebSocketService();
+  const { connectionStatus, isConnected, connect } = useWebSocketService();
 
-  // 检查是否可以开始生成
+  // 检查是否可以开始生成（不检查连接状态，因为我们会自动连接）
   const canGenerate = () => {
-    // 检查连接状态
-    if (!isConnected || connectionStatus !== 'connected' || !clientId) {
-      return { canGenerate: false, reason: `未连接到服务器 (状态: ${connectionStatus})` };
+    // 检查客户端ID
+    if (!clientId) {
+      return { canGenerate: false, reason: '客户端ID未初始化，请刷新页面' };
     }
 
     // 检查是否有正在进行的任务
@@ -38,9 +40,9 @@ export const GenerateButton: React.FC = () => {
       return { canGenerate: false, reason: '请输入要合成的文本' };
     }
 
-    // 检查参考音频
-    if (!promptAudio) {
-      return { canGenerate: false, reason: '请上传参考音频' };
+    // 检查参考音频 - 支持上传文件或选择样本
+    if (!promptAudio && !selectedVoiceSample) {
+      return { canGenerate: false, reason: '请上传参考音频或选择音色样本' };
     }
 
     return { canGenerate: true, reason: '' };
@@ -54,15 +56,23 @@ export const GenerateButton: React.FC = () => {
       return;
     }
 
-    // 确保WebSocket连接正常
-    if (!isConnected) {
-      console.log('WebSocket未连接，请等待连接建立...');
-      alert('WebSocket未连接，请等待连接建立或刷新页面重试');
+    // 检查客户端ID
+    if (!clientId) {
+      alert('客户端ID未初始化，请刷新页面重试');
       return;
     }
 
+    // 如果WebSocket未连接，尝试连接（但不阻塞生成）
+    if (!isConnected || connectionStatus !== 'connected') {
+      console.log('⚠️ WebSocket未连接，尝试重新连接...');
+      connect(clientId).catch(error => {
+        console.error('WebSocket连接失败:', error);
+        // 不阻塞生成，因为HTTP请求可以独立工作
+      });
+    }
+
     const textToUse = textSegments.length > 0 ? textSegments.join('') : inputText;
-    const taskId = `task_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const taskId = `task_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
 
     console.log('=== TTS请求详情 ===');
     console.log('客户端ID:', clientId);
@@ -70,6 +80,8 @@ export const GenerateButton: React.FC = () => {
     console.log('连接状态:', connectionStatus);
     console.log('任务ID:', taskId);
     console.log('文本内容:', textToUse);
+    console.log('音色样本:', selectedVoiceSample?.id || '上传文件');
+    console.log('情绪样本:', selectedEmotionSample?.id || (emoAudio ? '上传文件' : '无'));
     console.log('=== 请求详情结束 ===');
 
     // 创建新任务
@@ -94,17 +106,23 @@ export const GenerateButton: React.FC = () => {
         ...ttsParams,
         text: textToUse  // 确保使用正确的文本内容
       };
-      
-      // 发送请求
-      const response = await api.generateTTS(ttsRequestParams, clientId!, promptAudio!, emoAudio || undefined, taskId);
-      
+
+      // 发送请求 - 使用新的API格式
+      const response = await api.generateTTS(ttsRequestParams, clientId!, {
+        promptAudio: promptAudio || undefined,
+        emoAudio: emoAudio || undefined,
+        voiceSampleId: selectedVoiceSample?.id,
+        emotionSampleId: selectedEmotionSample?.id,
+        taskId
+      });
+
       // 后端异步返回结果，只要请求成功(200)就等待WebSocket消息
       console.log('TTS生成请求已发送，等待WebSocket消息...', response);
       console.log('使用任务ID:', taskId);
       console.log('前端使用的客户端ID:', clientId);
     } catch (error) {
       console.error('TTS生成错误:', error);
-      
+
       // 更新任务状态为错误
       const errorTask = {
         ...newTask,
@@ -113,7 +131,7 @@ export const GenerateButton: React.FC = () => {
         completedAt: Date.now(),
         duration: (Date.now() - newTask.createdAt) / 1000
       };
-      
+
       setCurrentTask(errorTask);
       addTaskToHistory(errorTask);
       setIsLoading(false);

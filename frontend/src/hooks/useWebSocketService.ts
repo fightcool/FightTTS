@@ -22,8 +22,8 @@ export const useWebSocketService = () => {
 
   // 状态更新回调函数
   const statusCallback = useCallback((status: ConnectionStatus) => {
-    // 只在开发环境或连接状态改变时输出日志
-    if (process.env.NODE_ENV === 'development' || status !== connectionStatus) {
+    // 只在状态真正改变时输出日志
+    if (status !== connectionStatus) {
       console.log('状态更新回调:', status);
     }
     setConnectionStatus(status);
@@ -128,47 +128,23 @@ export const useWebSocketService = () => {
     return service?.sendMessage(message) ?? false;
   }, [service]);
 
-  // 自动连接逻辑 - 使用独立的effect，但避免重复触发
+  // 初始连接 - 只在页面加载时连接一次
   useEffect(() => {
     const currentClientId = store.clientId;
 
-    if (currentClientId && !isConnected && service && connectionStatus !== 'connecting') {
-      console.log('触发自动连接，客户端ID:', currentClientId, '当前状态:', connectionStatus);
-      // 延迟连接，避免快速重连
+    if (currentClientId && service && connectionStatus === 'disconnected') {
+      console.log('初始化WebSocket连接，客户端ID:', currentClientId);
+
       const timer = setTimeout(() => {
-        // 再次检查状态，避免重复连接
-        if (!isConnected && connectionStatus !== 'connecting') {
-          connect(currentClientId).catch(error => {
-            console.error('自动连接失败:', error);
-          });
-        }
-      }, 500);
+        connect(currentClientId).catch(error => {
+          console.error('初始连接失败:', error);
+          // 不自动重连，让用户在需要时手动触发
+        });
+      }, 1000);
 
       return () => clearTimeout(timer);
     }
-  }, [store.clientId, isConnected, connectionStatus, service, connect]);
-
-  // 页面可见性变化时的重连逻辑
-  useEffect(() => {
-    const handleVisibilityChange = () => {
-      const currentClientId = store.clientId;
-
-      if (document.visibilityState === 'visible' && currentClientId && !isConnected && service) {
-        console.log('页面重新可见，尝试重连WebSocket');
-        setTimeout(() => {
-          connect(currentClientId).catch(error => {
-          console.error('页面可见性重连失败:', error);
-          // 不显示错误给用户，静默处理
-        });
-      }, 500);
-      }
-    };
-
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-    };
-  }, [store.clientId, isConnected, service, connect]);
+  }, [store.clientId, service, connectionStatus, connect]); // 添加所有依赖
 
   return {
     // 连接状态

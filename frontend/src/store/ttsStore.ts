@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { devtools } from 'zustand/middleware';
 import { TTSRequest, ExampleCase, AppConfig } from '../utils/api';
+import { AudioSample } from '../types/audio';
 
 // TTS任务状态
 export interface TTSTask {
@@ -23,30 +24,35 @@ interface TTSState {
 
   // 输入文本
   inputText: string;
-  
+
   // TTS参数
   ttsParams: TTSRequest;
-  
-  // 音频文件
+
+  // 音频文件（保持向后兼容）
   promptAudio: File | null;
   emoAudio: File | null;
-  
+
+  // 音频选择器状态
+  selectedVoiceSample: AudioSample | null;
+  selectedEmotionSample: AudioSample | null;
+  audioSelectorMode: 'upload' | 'selector'; // 音频选择模式
+
   // 任务管理
   currentTask: TTSTask | null;
   taskHistory: TTSTask[];
-  
+
   // 应用配置
   config: AppConfig | null;
   examples: ExampleCase[];
-  
+
   // UI状态
   isGenerating: boolean;
   showAdvanced: boolean;
   selectedExample: ExampleCase | null;
-  
+
   // 文本分段
   textSegments: Array<{ index: number; content: string; tokens: number }>;
-  
+
   // Actions
   setClientId: (clientId: string) => void;
   setIsLoading: (loading: boolean) => void;
@@ -54,6 +60,9 @@ interface TTSState {
   updateTTSParams: (params: Partial<TTSRequest>) => void;
   setPromptAudio: (file: File | null) => void;
   setEmoAudio: (file: File | null) => void;
+  setSelectedVoiceSample: (sample: AudioSample | null) => void;
+  setSelectedEmotionSample: (sample: AudioSample | null) => void;
+  setAudioSelectorMode: (mode: 'upload' | 'selector') => void;
   setCurrentTask: (task: TTSTask | null) => void;
   updateTaskProgress: (taskId: string, progress: number, message: string) => void;
   completeTask: (taskId: string, result: string) => void;
@@ -100,6 +109,9 @@ export const useTTSStore = create<TTSState>()(
       ttsParams: { ...defaultTTSParams },
       promptAudio: null,
       emoAudio: null,
+      selectedVoiceSample: null,
+      selectedEmotionSample: null,
+      audioSelectorMode: 'selector',
       currentTask: null,
       taskHistory: [],
       config: null,
@@ -124,7 +136,13 @@ export const useTTSStore = create<TTSState>()(
       setPromptAudio: (file) => set({ promptAudio: file }),
       
       setEmoAudio: (file) => set({ emoAudio: file }),
-      
+
+      setSelectedVoiceSample: (sample) => set({ selectedVoiceSample: sample }),
+
+      setSelectedEmotionSample: (sample) => set({ selectedEmotionSample: sample }),
+
+      setAudioSelectorMode: (mode) => set({ audioSelectorMode: mode }),
+
       setCurrentTask: (task) => {
       console.log('📝 Store设置当前任务:', task);
       set({ currentTask: task });
@@ -257,6 +275,9 @@ export const useTTSStore = create<TTSState>()(
         ttsParams: { ...defaultTTSParams },
         promptAudio: null,
         emoAudio: null,
+        selectedVoiceSample: null,
+        selectedEmotionSample: null,
+        audioSelectorMode: 'selector',
         currentTask: null,
         isGenerating: false,
         selectedExample: null,

@@ -74,6 +74,8 @@ export const useSimplifiedWebSocket = (options: UseSimplifiedWebSocketOptions = 
         const taskId = message.task_id;
         if (taskId) {
           options.onTaskStart?.(taskId);
+          // 通知WebSocket客户端有活跃任务
+          wsClientRef.current?.setActiveTask(true);
           // 创建任务状态
           store.setCurrentTask({
             id: taskId,
@@ -99,6 +101,8 @@ export const useSimplifiedWebSocket = (options: UseSimplifiedWebSocketOptions = 
         if (taskId && message.result) {
           options.onTaskComplete?.(taskId, message.result);
           store.completeTask(taskId, message.result);
+          // 通知WebSocket客户端任务已完成
+          wsClientRef.current?.setActiveTask(false);
         }
       });
 
@@ -108,6 +112,8 @@ export const useSimplifiedWebSocket = (options: UseSimplifiedWebSocketOptions = 
           const error = message.error || '生成失败';
           options.onTaskError?.(taskId, error);
           store.failTask(taskId, error);
+          // 通知WebSocket客户端任务已完成（失败）
+          wsClientRef.current?.setActiveTask(false);
         }
       });
 
@@ -140,6 +146,33 @@ export const useSimplifiedWebSocket = (options: UseSimplifiedWebSocketOptions = 
   useEffect(() => {
     return cleanup;
   }, [cleanup]);
+
+  // 页面可见性变化时的智能重连逻辑
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      const currentClientId = store.clientId;
+
+      // 只有在页面可见且没有连接时才考虑重连
+      if (document.visibilityState === 'visible' && currentClientId && !isConnected && wsClientRef.current) {
+        // 检查是否应该重连（避免不必要的重连）
+        if (wsClientRef.current.shouldConnect()) {
+          console.log('页面重新可见，智能重连WebSocket');
+          setTimeout(() => {
+            connect(currentClientId).catch(error => {
+              console.error('页面可见性重连失败:', error);
+            });
+          }, 1000); // 延迟1秒重连，避免频繁重连
+        } else {
+          console.log('页面重新可见，但智能模式跳过重连');
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [store.clientId, isConnected, connect]);
 
   return {
     isConnected,

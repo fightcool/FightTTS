@@ -32,6 +32,8 @@ export const AudioWaveform: React.FC<AudioWaveformProps> = ({
   const wavesurfer = useRef<WaveSurfer | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [hasError, setHasError] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
   const [duration, setDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
   const [volume, setVolume] = useState(1);
@@ -60,6 +62,8 @@ export const AudioWaveform: React.FC<AudioWaveformProps> = ({
     // 事件监听
     wavesurfer.current.on('ready', () => {
       setIsLoading(false);
+      setHasError(false);
+      setErrorMessage('');
       setDuration(wavesurfer.current?.getDuration() || 0);
       onReady?.();
     });
@@ -92,6 +96,8 @@ export const AudioWaveform: React.FC<AudioWaveformProps> = ({
       console.error('WaveSurfer error:', error);
       setIsLoading(false);
       setIsPlaying(false);
+      setHasError(true);
+      setErrorMessage(error instanceof Error ? error.message : '音频加载失败');
     });
 
     return () => {
@@ -102,7 +108,7 @@ export const AudioWaveform: React.FC<AudioWaveformProps> = ({
         objectUrlRef.current = null;
       }
     };
-  }, [height, waveColor, progressColor, onReady, onPlay, onPause]);
+  }, [height, waveColor, progressColor, onReady, onPlay, onPause, audioUrl, audioFile]);
 
   useEffect(() => {
     if (!wavesurfer.current) return;
@@ -187,15 +193,14 @@ export const AudioWaveform: React.FC<AudioWaveformProps> = ({
       console.error('错误消息:', error instanceof Error ? error.message : String(error));
       console.error('完整错误:', error);
       setIsLoading(false);
-      
+      setHasError(true);
+      setErrorMessage(error instanceof Error ? error.message : '音频加载失败');
+
       // 清理失败的blob URL
       if (objectUrlRef.current) {
         URL.revokeObjectURL(objectUrlRef.current);
         objectUrlRef.current = null;
       }
-      
-      // 显示用户友好的错误信息
-      alert(`音频加载失败: ${error instanceof Error ? error.message : '未知错误'}`);
     }
   };
 
@@ -203,8 +208,8 @@ export const AudioWaveform: React.FC<AudioWaveformProps> = ({
   }, [audioUrl, audioFile]);
 
   const togglePlayPause = () => {
-    if (!wavesurfer.current || isLoading) return;
-    
+    if (!wavesurfer.current || isLoading || hasError) return;
+
     try {
       if (isPlaying) {
         wavesurfer.current.pause();
@@ -256,16 +261,25 @@ export const AudioWaveform: React.FC<AudioWaveformProps> = ({
           <span className="ml-2 text-secondary-600">加载音频中...</span>
         </div>
       )}
+
+      {/* 错误状态 */}
+      {hasError && (
+        <div className="flex items-center justify-center py-4 px-4 bg-red-50 border border-red-200 rounded-lg">
+          <div className="text-sm text-red-600">
+            音频加载失败: {errorMessage}
+          </div>
+        </div>
+      )}
       
       {/* 控制面板 */}
-      {showControls && !isLoading && (
+      {showControls && (audioUrl || audioFile) && (
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-4">
             {/* 播放/暂停按钮 */}
             <button
               onClick={togglePlayPause}
-              className="flex items-center justify-center w-10 h-10 bg-primary-600 hover:bg-primary-700 text-white rounded-full transition-colors duration-200"
-              disabled={!audioUrl && !audioFile}
+              className="flex items-center justify-center w-10 h-10 bg-primary-600 hover:bg-primary-700 disabled:bg-secondary-300 text-white rounded-full transition-colors duration-200"
+              disabled={!audioUrl && !audioFile || hasError}
             >
               {isPlaying ? (
                 <Pause className="w-5 h-5" />

@@ -368,8 +368,41 @@ app.add_middleware(
 # 静态文件服务
 os.makedirs("outputs", exist_ok=True)
 os.makedirs("uploads", exist_ok=True)
+os.makedirs("audio_samples", exist_ok=True)
+os.makedirs("audio_samples/voice_samples", exist_ok=True)
+os.makedirs("audio_samples/emotion_samples", exist_ok=True)
 app.mount("/outputs", StaticFiles(directory="outputs"), name="outputs")
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+app.mount("/audio-samples", StaticFiles(directory="audio_samples"), name="audio_samples")
+
+def resolve_sample_path(sample_id: str) -> Optional[str]:
+    """
+    根据样本ID解析实际的文件路径
+    sample_id格式: category_filename (例如: voice_male_01)
+    """
+    try:
+        parts = sample_id.split('_', 1)
+        if len(parts) != 2:
+            return None
+
+        category, filename_stem = parts
+
+        if category == "voice":
+            search_dir = Path("audio_samples/voice_samples")
+        elif category == "emotion":
+            search_dir = Path("audio_samples/emotion_samples")
+        else:
+            return None
+
+        # 查找匹配的文件
+        for audio_file in search_dir.glob(f"{filename_stem}.*"):
+            if audio_file.suffix.lower() in ['.wav', '.mp3', '.m4a', '.flac', '.ogg']:
+                return str(audio_file)
+
+        return None
+    except Exception as e:
+        logger.error(f"解析样本路径失败: {sample_id}, 错误: {e}")
+        return None
 
 class ProgressCallback:
     def __init__(self, client_id: str, task_id: str, manager: ConnectionManager):
@@ -378,17 +411,6 @@ class ProgressCallback:
         self.manager = manager
         self.last_progress = 0
         self.start_time = time.time()
-        # 必须在主线程中创建，确保能获取到事件循环
-        try:
-            self.main_loop = asyncio.get_running_loop()
-            if not self.main_loop.is_running():
-                raise RuntimeError("事件循环未运行")
-            print(f"ProgressCallback初始化成功，主事件循环: {self.main_loop}")
-        except RuntimeError as e:
-            # 如果没有运行的事件循环，这是一个严重错误
-            print(f"错误: ProgressCallback必须在有运行事件循环的线程中创建: {e}")
-            self.main_loop = None
-            raise
         
     async def send_progress(self, progress: int, message: str = ""):
         """发送进度更新，包含连接状态检查"""
@@ -402,7 +424,6 @@ class ProgressCallback:
         progress_message = {
             "type": "progress",
             "task_id": self.task_id,
-            "client_id": self.client_id,
             "progress": progress,
             "message": message,
             "elapsed_time": elapsed_time
@@ -430,7 +451,6 @@ class ProgressCallback:
         start_message = {
             "type": "start",
             "task_id": self.task_id,
-            "client_id": self.client_id,
             "timestamp": time.time()
         }
         
@@ -456,7 +476,6 @@ class ProgressCallback:
         complete_message = {
             "type": "complete",
             "task_id": self.task_id,
-            "client_id": self.client_id,
             "result": result,
             "timestamp": time.time(),
             "total_time": time.time() - self.start_time
@@ -489,7 +508,6 @@ class ProgressCallback:
         error_msg = {
             "type": "error",
             "task_id": self.task_id,
-            "client_id": self.client_id,
             "error": error_message,
             "timestamp": time.time()
         }
@@ -498,32 +516,6 @@ class ProgressCallback:
         if success:
             print(f"错误消息发送: {self.task_id} -> {error_message}")
         return success
-
-    def send_progress_sync(self, progress: int, message: str = ""):
-        """线程安全的同步进度发送方法"""
-        if self.main_loop is None:
-            print(f"错误: 没有主事件循环引用，无法发送进度: {progress}% - {message}")
-            return False
-
-        try:
-            # 使用线程安全的方式调用异步方法
-            future = asyncio.run_coroutine_threadsafe(
-                self.send_progress(progress, message),
-                self.main_loop
-            )
-
-            # 等待结果，但设置超时避免阻塞
-            try:
-                result = future.result(timeout=2.0)  # 2秒超时
-                print(f"进度发送成功: {progress}% - {message}")
-                return result
-            except asyncio.TimeoutError:
-                print(f"进度更新超时: {progress}% - {message}")
-                return False
-
-        except Exception as e:
-            print(f"线程安全进度发送失败: {type(e).__name__}: {e}")
-            return False
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -582,7 +574,7 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
     try:
         connection_success = await manager.connect(websocket, client_id)
         if not connection_success:
-            logger.warning(f"WebSocket connection failed for client: {client_id}")
+            logger.warning(f"WebSocket 连接失败，clientID: {client_id}")
             return
     except Exception as e:
         logger.error(f"WebSocket connection exception for client {client_id}: {e}")
@@ -591,14 +583,11 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
     try:
         while True:
             try:
-                # 设置接收超时，避免长时间阻塞 - 设置为90秒，更宽容
-                data = await asyncio.wait_for(websocket.receive_text(), timeout=90.0)
+                # 设置接收超时，避免长时间阻塞 - 调整为45秒以匹配前端心跳间隔
+                data = await asyncio.wait_for(websocket.receive_text(), timeout=45.0)
                 message = json.loads(data)
 
-                # 减少心跳日志的噪音
-                message_type = message.get('type', 'unknown')
-                if message_type not in ['heartbeat', 'heartbeat_response', 'heartbeat_check', 'ping', 'pong']:
-                    logger.info(f"Received WebSocket message from {client_id}: type={message_type}")
+                logger.info(f"Received WebSocket message from {client_id}: type={message.get('type', 'unknown')}")
 
                 if message.get("type") == "heartbeat":
                     # 更新心跳时间
@@ -661,8 +650,11 @@ async def generate_tts(
     text: str,
     voice_name: str,
     client_id: str,
+    task_id: str,
     prompt_audio: Optional[UploadFile] = None,
     emo_audio: Optional[UploadFile] = None,
+    voice_sample_id: Optional[str] = Form(None),
+    emotion_sample_id: Optional[str] = Form(None),
     speed: float = 1.0,
     temperature: float = 0.7,
     top_p: float = 0.9,
@@ -677,17 +669,13 @@ async def generate_tts(
 ):
     """生成TTS音频的异步函数"""
 
-    # 生成唯一任务ID
-    task_id = f"task_{int(time.time() * 1000000)}_{uuid.uuid4().hex[:8]}"
-    print(f"生成唯一TaskID: {task_id}")
-
     # 创建进度回调对象
     progress_callback = ProgressCallback(client_id, task_id, manager)
-    
+
     try:
         # 发送任务开始消息
         await progress_callback.send_start()
-        
+
         # 检查连接状态
         connection_info = manager.get_connection_info(client_id)
         if not connection_info.get("connected"):
@@ -695,26 +683,44 @@ async def generate_tts(
             print(f"任务ID: {task_id}")
             print(f"客户端ID: {client_id}")
             return
-        
+
         print(f"=== 开始TTS生成任务 ===")
         print(f"任务ID: {task_id}")
         print(f"客户端ID: {client_id}")
         print(f"文本: {text[:50]}...")
         print(f"声音: {voice_name}")
-        
-        # 处理上传的音频文件
+
+        # 处理音频文件 - 支持上传文件或样本ID
         prompt_audio_path = None
         emo_audio_path = None
-        
-        if prompt_audio:
+
+        # 处理音色音频
+        if voice_sample_id:
+            # 使用样本ID
+            await progress_callback.send_progress(5, "加载音色样本")
+            prompt_audio_path = resolve_sample_path(voice_sample_id)
+            if not prompt_audio_path or not os.path.exists(prompt_audio_path):
+                raise HTTPException(status_code=404, detail=f"音色样本不存在: {voice_sample_id}")
+            print(f"使用音色样本: {prompt_audio_path}")
+        elif prompt_audio:
+            # 上传的文件
             await progress_callback.send_progress(5, "处理提示音频文件")
             prompt_audio_path = f"./uploads/{task_id}_prompt.wav"
             with open(prompt_audio_path, "wb") as f:
                 content = await prompt_audio.read()
                 f.write(content)
             print(f"提示音频保存到: {prompt_audio_path}")
-        
-        if emo_audio:
+
+        # 处理情绪音频
+        if emotion_sample_id:
+            # 使用样本ID
+            await progress_callback.send_progress(10, "加载情绪样本")
+            emo_audio_path = resolve_sample_path(emotion_sample_id)
+            if not emo_audio_path or not os.path.exists(emo_audio_path):
+                raise HTTPException(status_code=404, detail=f"情绪样本不存在: {emotion_sample_id}")
+            print(f"使用情绪样本: {emo_audio_path}")
+        elif emo_audio:
+            # 上传的文件
             await progress_callback.send_progress(10, "处理情感音频文件")
             emo_audio_path = f"./uploads/{task_id}_emo.wav"
             with open(emo_audio_path, "wb") as f:
@@ -728,15 +734,17 @@ async def generate_tts(
             return
             
         await progress_callback.send_progress(15, "初始化TTS模型")
-
+        
         # 创建一个简单的进度回调函数，用于兼容现有的TTS接口
         def sync_progress_callback(progress: float, desc: str = ""):
             progress_percent = int(progress * 100)
-            # 使用新的线程安全方法
-            success = progress_callback.send_progress_sync(progress_percent, desc)
-            if not success:
-                print(f"进度发送失败: {progress_percent}% - {desc}")
-            return success
+            # 使用asyncio.create_task异步发送进度
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    asyncio.create_task(progress_callback.send_progress(progress_percent, desc))
+            except Exception as e:
+                print(f"进度回调错误: {e}")
         
         # 调用TTS生成函数
         output_path = f"./outputs/{task_id}.wav"
@@ -850,6 +858,18 @@ def tts_generate_with_callback(
     prompt_lang: str = "zh",
     text_lang: str = "zh",
     cut_method: str = "cut5",
+    # 新增的生成参数
+    do_sample: bool = True,
+    length_penalty: float = 0.0,
+    num_beams: int = 3,
+    repetition_penalty: float = 10.0,
+    max_mel_tokens: int = 1500,
+    max_text_tokens_per_segment: int = 120,
+    emo_weight: float = 1.0,
+    emo_random: bool = False,
+    emo_control_method: str = "audio",
+    emo_text: str = None,
+    emo_vector: list = None,
     progress_callback=None
 ) -> bool:
     """
@@ -1008,6 +1028,300 @@ async def get_config():
 @app.get("/")
 async def root():
     return {"message": "IndexTTS API Server is running", "version": "2.0.0"}
+
+# ==================== 音频样本管理API ====================
+
+class AudioSampleInfo(BaseModel):
+    id: str
+    name: str
+    category: str
+    subcategory: str
+    fileName: str
+    filePath: str
+    duration: float = 0.0
+    description: Optional[str] = None
+    tags: List[str] = []
+    metadata: Optional[dict] = None
+
+@app.get("/api/audio-samples/scan")
+async def scan_audio_samples():
+    """扫描并返回所有音频样本"""
+    try:
+        voice_samples = []
+        emotion_samples = []
+
+        # 扫描音色样本目录
+        voice_dir = Path("audio_samples/voice_samples")
+        if voice_dir.exists():
+            for audio_file in voice_dir.glob("*"):
+                if audio_file.suffix.lower() in ['.wav', '.mp3', '.m4a', '.flac', '.ogg']:
+                    sample = {
+                        "id": f"voice_{audio_file.stem}",
+                        "name": audio_file.stem.replace('_', ' ').title(),
+                        "category": "voice",
+                        "subcategory": infer_subcategory(audio_file.stem, "voice"),
+                        "fileName": audio_file.name,
+                        "filePath": f"/audio-samples/voice_samples/{audio_file.name}",
+                        "duration": 0.0,
+                        "description": f"音色样本 - {audio_file.stem}",
+                        "tags": ["voice", infer_subcategory(audio_file.stem, "voice")],
+                        "metadata": {
+                            "size": audio_file.stat().st_size,
+                            "created": audio_file.stat().st_ctime
+                        }
+                    }
+                    voice_samples.append(sample)
+
+        # 扫描情绪样本目录
+        emotion_dir = Path("audio_samples/emotion_samples")
+        if emotion_dir.exists():
+            for audio_file in emotion_dir.glob("*"):
+                if audio_file.suffix.lower() in ['.wav', '.mp3', '.m4a', '.flac', '.ogg']:
+                    sample = {
+                        "id": f"emotion_{audio_file.stem}",
+                        "name": audio_file.stem.replace('_', ' ').title(),
+                        "category": "emotion",
+                        "subcategory": infer_subcategory(audio_file.stem, "emotion"),
+                        "fileName": audio_file.name,
+                        "filePath": f"/audio-samples/emotion_samples/{audio_file.name}",
+                        "duration": 0.0,
+                        "description": f"情绪样本 - {audio_file.stem}",
+                        "tags": ["emotion", infer_subcategory(audio_file.stem, "emotion")],
+                        "metadata": {
+                            "size": audio_file.stat().st_size,
+                            "created": audio_file.stat().st_ctime
+                        }
+                    }
+                    emotion_samples.append(sample)
+
+        logger.info(f"扫描完成: {len(voice_samples)} 个音色样本, {len(emotion_samples)} 个情绪样本")
+
+        return {
+            "voice_samples": voice_samples,
+            "emotion_samples": emotion_samples,
+            "total": len(voice_samples) + len(emotion_samples)
+        }
+    except Exception as e:
+        logger.error(f"扫描音频样本失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+def infer_subcategory(filename: str, category: str) -> str:
+    """从文件名推断子分类"""
+    name = filename.lower()
+
+    if category == "voice":
+        if "male" in name and "female" not in name:
+            return "male"
+        elif "female" in name:
+            return "female"
+        elif "child" in name or "kid" in name:
+            return "child"
+        elif "old" in name or "elder" in name:
+            return "old"
+        return "neutral"
+
+    elif category == "emotion":
+        if "happy" in name or "excited" in name or "cheerful" in name:
+            return "happy"
+        elif "sad" in name or "cry" in name or "grief" in name:
+            return "sad"
+        elif "angry" in name or "irritated" in name or "furious" in name:
+            return "angry"
+        elif "peaceful" in name or "calm" in name or "relax" in name:
+            return "peaceful"
+        return "neutral"
+
+    return "neutral"
+
+@app.post("/api/audio-samples/upload")
+async def upload_audio_sample(
+    file: UploadFile = File(...),
+    category: str = Form(...),
+    name: Optional[str] = Form(None)
+):
+    """上传新的音频样本"""
+    try:
+        # 验证分类
+        if category not in ["voice", "emotion"]:
+            raise HTTPException(status_code=400, detail="分类必须是 'voice' 或 'emotion'")
+
+        # 验证文件格式
+        if not file.filename:
+            raise HTTPException(status_code=400, detail="文件名不能为空")
+
+        file_ext = Path(file.filename).suffix.lower()
+        if file_ext not in ['.wav', '.mp3', '.m4a', '.flac', '.ogg']:
+            raise HTTPException(status_code=400, detail="不支持的音频格式")
+
+        # 生成文件名
+        if name:
+            # 使用用户提供的名称
+            safe_name = "".join(c for c in name if c.isalnum() or c in (' ', '-', '_')).strip()
+            safe_name = safe_name.replace(' ', '_')
+            filename = f"{safe_name}{file_ext}"
+        else:
+            # 使用原始文件名
+            filename = file.filename
+
+        # 确定保存路径
+        if category == "voice":
+            save_dir = Path("audio_samples/voice_samples")
+        else:
+            save_dir = Path("audio_samples/emotion_samples")
+
+        save_dir.mkdir(parents=True, exist_ok=True)
+        save_path = save_dir / filename
+
+        # 检查文件是否已存在
+        if save_path.exists():
+            # 添加时间戳避免冲突
+            timestamp = int(time.time())
+            stem = save_path.stem
+            filename = f"{stem}_{timestamp}{file_ext}"
+            save_path = save_dir / filename
+
+        # 保存文件
+        content = await file.read()
+        with open(save_path, "wb") as f:
+            f.write(content)
+
+        logger.info(f"音频样本上传成功: {save_path}")
+
+        # 返回样本信息
+        sample = {
+            "id": f"{category}_{save_path.stem}",
+            "name": save_path.stem.replace('_', ' ').title(),
+            "category": category,
+            "subcategory": infer_subcategory(save_path.stem, category),
+            "fileName": filename,
+            "filePath": f"/audio-samples/{category}_samples/{filename}",
+            "duration": 0.0,
+            "description": f"{category} 样本 - {save_path.stem}",
+            "tags": [category, infer_subcategory(save_path.stem, category)],
+            "metadata": {
+                "size": save_path.stat().st_size,
+                "created": save_path.stat().st_ctime
+            }
+        }
+
+        return sample
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"上传音频样本失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/audio-samples/{sample_id}")
+async def delete_audio_sample(sample_id: str):
+    """删除音频样本"""
+    try:
+        # 解析sample_id (格式: category_filename)
+        parts = sample_id.split('_', 1)
+        if len(parts) != 2:
+            raise HTTPException(status_code=400, detail="无效的样本ID")
+
+        category, filename_stem = parts
+
+        if category not in ["voice", "emotion"]:
+            raise HTTPException(status_code=400, detail="无效的分类")
+
+        # 查找文件
+        if category == "voice":
+            search_dir = Path("audio_samples/voice_samples")
+        else:
+            search_dir = Path("audio_samples/emotion_samples")
+
+        # 查找匹配的文件
+        found_file = None
+        for audio_file in search_dir.glob(f"{filename_stem}.*"):
+            if audio_file.suffix.lower() in ['.wav', '.mp3', '.m4a', '.flac', '.ogg']:
+                found_file = audio_file
+                break
+
+        if not found_file or not found_file.exists():
+            raise HTTPException(status_code=404, detail="音频样本不存在")
+
+        # 删除文件
+        found_file.unlink()
+        logger.info(f"音频样本已删除: {found_file}")
+
+        return {"message": "音频样本已删除", "id": sample_id}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"删除音频样本失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/api/audio-samples/{sample_id}")
+async def update_audio_sample(sample_id: str, new_name: str = Form(...)):
+    """更新音频样本信息（重命名）"""
+    try:
+        # 解析sample_id
+        parts = sample_id.split('_', 1)
+        if len(parts) != 2:
+            raise HTTPException(status_code=400, detail="无效的样本ID")
+
+        category, filename_stem = parts
+
+        if category not in ["voice", "emotion"]:
+            raise HTTPException(status_code=400, detail="无效的分类")
+
+        # 查找文件
+        if category == "voice":
+            search_dir = Path("audio_samples/voice_samples")
+        else:
+            search_dir = Path("audio_samples/emotion_samples")
+
+        # 查找匹配的文件
+        found_file = None
+        for audio_file in search_dir.glob(f"{filename_stem}.*"):
+            if audio_file.suffix.lower() in ['.wav', '.mp3', '.m4a', '.flac', '.ogg']:
+                found_file = audio_file
+                break
+
+        if not found_file or not found_file.exists():
+            raise HTTPException(status_code=404, detail="音频样本不存在")
+
+        # 生成新文件名
+        safe_name = "".join(c for c in new_name if c.isalnum() or c in (' ', '-', '_')).strip()
+        safe_name = safe_name.replace(' ', '_')
+        new_filename = f"{safe_name}{found_file.suffix}"
+        new_path = search_dir / new_filename
+
+        # 检查新文件名是否已存在
+        if new_path.exists() and new_path != found_file:
+            raise HTTPException(status_code=400, detail="该名称已被使用")
+
+        # 重命名文件
+        found_file.rename(new_path)
+        logger.info(f"音频样本已重命名: {found_file} -> {new_path}")
+
+        # 返回更新后的样本信息
+        sample = {
+            "id": f"{category}_{new_path.stem}",
+            "name": new_path.stem.replace('_', ' ').title(),
+            "category": category,
+            "subcategory": infer_subcategory(new_path.stem, category),
+            "fileName": new_filename,
+            "filePath": f"/audio-samples/{category}_samples/{new_filename}",
+            "duration": 0.0,
+            "description": f"{category} 样本 - {new_path.stem}",
+            "tags": [category, infer_subcategory(new_path.stem, category)],
+            "metadata": {
+                "size": new_path.stat().st_size,
+                "created": new_path.stat().st_ctime
+            }
+        }
+
+        return sample
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"更新音频样本失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     # 配置Uvicorn启动参数，避免多进程日志冲突

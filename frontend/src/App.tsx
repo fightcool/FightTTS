@@ -7,7 +7,7 @@ import { api, createClientId } from './utils/api';
 // 导入所有组件
 import { ConnectionStatus } from './components/ConnectionStatus';
 import { TextInput } from './components/TextInput';
-import { AudioUpload } from './components/AudioUpload';
+import { EnhancedAudioSelector } from './components/EnhancedAudioSelector';
 import { EmotionControl } from './components/EmotionControl';
 import { AdvancedSettings } from './components/AdvancedSettings';
 import { GenerateButton } from './components/GenerateButton';
@@ -24,8 +24,7 @@ function App() {
     isLoading,
     clientId,
     setClientId,
-    promptAudio,
-    setPromptAudio
+    clearCurrentTask
   } = useTTSStore();
 
   // 调试：监控currentTask变化
@@ -43,17 +42,17 @@ function App() {
   }, []); // 移除clientId依赖，避免循环
 
   // 初始化WebSocket连接 - useWebSocketService统一管理
-  const { isConnected, connectionStatus } = useWebSocketService();
+  const { connectionStatus } = useWebSocketService();
 
   // 加载应用配置和健康检查 - 合并为一个effect
   useEffect(() => {
     let isMounted = true;
-    let intervalId: NodeJS.Timeout;
+    let intervalId: number;
 
     const initializeApp = async () => {
       try {
         // 并行加载配置和健康检查
-        const [configResponse, healthResponse] = await Promise.all([
+        const [configResponse] = await Promise.all([
           api.getConfig(),
           api.healthCheck()
         ]);
@@ -102,7 +101,7 @@ function App() {
               </div>
               <div>
                 <h1 className="text-xl font-bold text-secondary-900">
-                  IndexTTS
+                  战酷语音合成系统 - FightTTS
                 </h1>
                 <p className="text-sm text-secondary-600">
                   智能语音合成系统
@@ -136,13 +135,18 @@ function App() {
             {/* 文本输入 */}
             <TextInput />
 
-            {/* 音频上传 */}
-            <AudioUpload 
-              label="参考音频"
-              value={promptAudio}
-              onChange={setPromptAudio}
-              placeholder="上传用于音色参考的音频文件"
-              required={false}
+            {/* 音频选择 - 音色 */}
+            <EnhancedAudioSelector
+              type="voice"
+              label="音色参考"
+              className="w-full"
+            />
+
+            {/* 音频选择 - 情绪 */}
+            <EnhancedAudioSelector
+              type="emotion"
+              label="情绪参考"
+              className="w-full"
             />
 
             {/* 情感控制 */}
@@ -220,7 +224,7 @@ function App() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
           <div className="flex items-center justify-between text-sm text-secondary-600">
             <div className="flex items-center space-x-4">
-              <span>© 2024 IndexTTS</span>
+              <span>© 2024 FightCoolTTS</span>
               <span>•</span>
               <span>基于 React + FastAPI + WebSocket</span>
             </div>
