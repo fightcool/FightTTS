@@ -93,6 +93,7 @@ checkpoints/*.ckpt
 checkpoints/hf_cache/
 checkpoints/qwen*/
 checkpoints/*-merge/
+index-tts/test_api.py
 
 # 所有音频文件（示例音频除外）
 !examples/
